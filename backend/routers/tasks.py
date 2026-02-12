@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from .. import crud, models, schemas
 from ..database import get_db
 from ..utils.file_ops import save_upload_file, ensure_directory
+from ..worker.tasks import process_video_task
 import os
 import uuid
 import shutil
@@ -84,7 +85,13 @@ async def create_task(
     task_data = schemas.TaskCreate(**task_data_dict)
 
     # 调用 CRUD 创建任务
-    return crud.create_task(db=db, task=task_data)
+    new_task = crud.create_task(db=db, task=task_data)
+
+    # 触发 Celery 任务
+    logger.info(f"触发 Celery 任务: {new_task.id}")
+    process_video_task.delay(new_task.id)
+
+    return new_task
 
 
 @router.get("/", response_model=list[schemas.Task], summary="获取任务列表", description="获取所有历史任务，按创建时间倒序排列。")
@@ -123,6 +130,14 @@ def task_action(task_id: str, action: str, db: Session = Depends(get_db)):
         return {"message": "任务已暂停 (信号已发送)"}
     elif action == "resume":
         crud.update_task(db, task_id, {"status": models.TaskStatus.PENDING}) # 或者 PROCESSING，取决于具体逻辑
+        # 恢复时，可能需要重新触发 Celery 任务，或者让 Celery 任务自己检查状态
+        # 这里简化为：前端调用 resume 后，Celery 任务若已退出则需重新触发，若还在运行只是暂停了循环则继续
+        # 由于我们 Celery 任务是检查 interrupt 的，如果完全退出了，需要重新 process。
+        # 为了健壮性，这里检查如果任务不是 PROCESSING 且不是 COMPLETED，则重新提交。
+        # 但要注意幂等性。
+        if db_task.status != models.TaskStatus.PROCESSING and db_task.status != models.TaskStatus.COMPLETED:
+             process_video_task.delay(task_id)
+
         return {"message": "任务已恢复 (信号已发送)"}
 
     raise HTTPException(status_code=400, detail="无效的操作指令")

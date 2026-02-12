@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import engine
-from .routers import tasks
+from .routers import tasks, download
 from . import models
 
 # Create database tables
@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(download.router, prefix="/api", tags=["download"]) # Add download router
 
 @app.get("/")
 def read_root():
