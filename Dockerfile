@@ -44,7 +44,9 @@ COPY backend/requirements.txt ./backend/requirements.txt
 # Install Python Dependencies
 # We use --no-cache-dir to keep image small
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r backend/requirements.txt
+    pip install --no-cache-dir -r backend/requirements.txt && \
+    python -m spacy download en_core_web_sm && \
+    python -m spacy download zh_core_web_sm
 
 # Pre-download models (Optional but recommended for faster startup)
 # We can add a script here to download whisper models if needed,
