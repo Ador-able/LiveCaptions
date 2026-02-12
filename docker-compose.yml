@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: subtitle_service
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist data (DB, Redis dump, uploads)
+      - ./data:/data
+      # Mount source code for dev (optional, but good for iterating)
+      - ./backend:/app/backend
+      # Mount models cache if needed to avoid re-downloading large models
+      - ./models_cache:/root/.cache/huggingface
+    environment:
+      - DATABASE_URL=sqlite:////data/tasks.db
+      - CELERY_BROKER_URL=redis://localhost:6379/0
+      - CELERY_RESULT_BACKEND=redis://localhost:6379/0
+      # Use GPU
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always
