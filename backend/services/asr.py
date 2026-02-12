@@ -2,7 +2,7 @@ import os
 from faster_whisper import WhisperModel
 from loguru import logger
 import torch
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 class ASRService:
     """
@@ -30,11 +30,15 @@ class ASRService:
             self.compute_type = "int8"
 
         logger.info(f"正在加载 Whisper 模型: {model_size} (设备: {self.device}, 精度: {self.compute_type})")
-        # 加载模型 (首次运行会自动下载)
-        self.model = WhisperModel(model_size, device=self.device, compute_type=self.compute_type)
-        logger.info("Whisper 模型加载完成。")
+        try:
+            # 加载模型 (首次运行会自动下载)
+            self.model = WhisperModel(model_size, device=self.device, compute_type=self.compute_type)
+            logger.info("Whisper 模型加载完成。")
+        except Exception as e:
+            logger.error(f"Whisper 模型加载失败: {e}")
+            raise RuntimeError(f"ASR Model load failed: {e}")
 
-    def transcribe(self, audio_path: str, language: str = None) -> (List[Dict[str, Any]], str):
+    def transcribe(self, audio_path: str, language: str = None) -> Tuple[List[Dict[str, Any]], str]:
         """
         转写音频文件。
 
@@ -46,36 +50,44 @@ class ASRService:
         - segments: 转写片段列表，包含 start, end, text, words。
         - language: 检测到的或指定的语言代码。
         """
+        if not os.path.exists(audio_path):
+            logger.error(f"音频文件未找到: {audio_path}")
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
         logger.info(f"开始转写音频: {audio_path}")
 
-        # 调用 transcribe 方法
-        # vad_filter=True: 使用内置 VAD 过滤静音片段，避免幻觉
-        # beam_size=5: 束搜索大小，越大越准但越慢
-        # word_timestamps=True: 输出单词级时间戳，这对后续对齐至关重要
-        segments, info = self.model.transcribe(
-            audio_path,
-            language=language,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500), # 最小静音时长 (毫秒)
-            beam_size=5,
-            word_timestamps=True
-        )
+        try:
+            # 调用 transcribe 方法
+            # vad_filter=True: 使用内置 VAD 过滤静音片段，避免幻觉
+            # beam_size=5: 束搜索大小，越大越准但越慢
+            # word_timestamps=True: 输出单词级时间戳，这对后续对齐至关重要
+            segments, info = self.model.transcribe(
+                audio_path,
+                language=language,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500), # 最小静音时长 (毫秒)
+                beam_size=5,
+                word_timestamps=True
+            )
 
-        logger.info(f"检测到的语言: {info.language} (置信度: {info.language_probability:.2f})")
+            logger.info(f"检测到的语言: {info.language} (置信度: {info.language_probability:.2f})")
 
-        # 将生成器转换为列表，确保所有片段都已生成
-        result_segments = []
-        for segment in segments:
-            result_segments.append({
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text.strip(),
-                # 单词级详细信息，用于精细对齐
-                "words": [{"start": w.start, "end": w.end, "word": w.word} for w in segment.words]
-            })
+            # 将生成器转换为列表，确保所有片段都已生成
+            result_segments = []
+            for segment in segments:
+                result_segments.append({
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text.strip(),
+                    # 单词级详细信息，用于精细对齐
+                    "words": [{"start": w.start, "end": w.end, "word": w.word} for w in segment.words]
+                })
 
-        logger.info(f"转写完成，共生成 {len(result_segments)} 个片段。")
-        return result_segments, info.language
+            logger.info(f"转写完成，共生成 {len(result_segments)} 个片段。")
+            return result_segments, info.language
+        except Exception as e:
+            logger.error(f"ASR 转写失败: {e}")
+            raise RuntimeError(f"ASR Transcription failed: {e}")
 
 # 单例实例 (供 worker 使用)
 # 在 Celery 中，我们可能希望每个 worker 进程只初始化一次模型

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from .. import crud, models, schemas
 from ..database import get_db
 from ..utils.file_ops import save_upload_file, ensure_directory
+from ..worker.tasks import process_video_task
 import os
 import uuid
 import shutil
@@ -84,7 +85,13 @@ async def create_task(
     task_data = schemas.TaskCreate(**task_data_dict)
 
     # 调用 CRUD 创建任务
-    return crud.create_task(db=db, task=task_data)
+    db_task = crud.create_task(db=db, task=task_data)
+
+    # 异步触发 Celery 任务
+    process_video_task.delay(db_task.id)
+    logger.info(f"Celery 任务已触发: {db_task.id}")
+
+    return db_task
 
 
 @router.get("/", response_model=list[schemas.Task], summary="获取任务列表", description="获取所有历史任务，按创建时间倒序排列。")
