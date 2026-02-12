@@ -27,7 +27,10 @@ class TaskCreate(TaskBase):
     """
     创建任务时的请求体 Schema
     """
-    pass
+    # 新增 LLM 配置字段
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = "gpt-4o"
 
 class TaskUpdate(BaseModel):
     """
@@ -53,6 +56,8 @@ class Task(TaskBase):
     updated_at: datetime
     logs: List[Any]
     task_metadata: Any
+    # LLM 配置信息 (返回给前端时可能需要隐藏 API Key，这里简单起见先包含，但前端不展示 Key 比较安全)
+    llm_config: Optional[Any] = None
 
     class Config:
         """

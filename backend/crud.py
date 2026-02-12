@@ -27,6 +27,13 @@ def create_task(db: Session, task: schemas.TaskCreate):
     # 使用 UUID 作为任务 ID
     new_task_id = str(uuid.uuid4())
 
+    # 提取 LLM 配置
+    llm_config = {
+        "api_key": task.api_key,
+        "base_url": task.base_url,
+        "model": task.model
+    }
+
     db_task = models.Task(
         id=new_task_id,
         video_path=task.video_path,
@@ -36,7 +43,8 @@ def create_task(db: Session, task: schemas.TaskCreate):
         progress=0.0,
         current_step="queued",
         created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        updated_at=datetime.utcnow(),
+        llm_config=llm_config # 存储 LLM 配置
     )
     db.add(db_task)
     db.commit()

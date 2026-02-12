@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from .. import crud, models, schemas
 from ..database import get_db
@@ -7,6 +7,7 @@ import os
 import uuid
 import shutil
 from loguru import logger
+from typing import Optional
 
 router = APIRouter()
 UPLOAD_DIR = "/data/uploads" # 默认上传目录
@@ -16,10 +17,14 @@ ensure_directory(UPLOAD_DIR)
 
 @router.post("/", response_model=schemas.Task, summary="创建新任务", description="上传文件或提供文件路径以创建新的字幕生成任务。")
 async def create_task(
-    file: UploadFile = File(None, description="要上传的视频文件"),
-    video_path: str = None, # 注意：这是可选的，如果上传文件则忽略此参数
-    source_language: str = "auto",
-    target_language: str = "zh",
+    # 使用 Form 参数，因为文件上传只能用 form-data
+    file: Optional[UploadFile] = File(None, description="要上传的视频文件"),
+    video_path: Optional[str] = Form(None, description="本地视频路径"),
+    source_language: str = Form("auto", description="源语言"),
+    target_language: str = Form("zh", description="目标语言"),
+    api_key: Optional[str] = Form(None, description="OpenAI API Key (可选)"),
+    base_url: Optional[str] = Form(None, description="OpenAI Base URL (可选)"),
+    model: str = Form("gpt-4o", description="LLM 模型名称"),
     db: Session = Depends(get_db)
 ):
     """
@@ -30,11 +35,22 @@ async def create_task(
     - video_path: 可选，本地文件路径（如果直接挂载了本地目录）。
     - source_language: 源语言 (默认 auto)。
     - target_language: 目标语言 (默认 zh)。
+    - api_key: LLM API Key (如果不填则尝试使用环境变量)。
+    - base_url: LLM Base URL (如果不填则尝试使用环境变量)。
 
     返回:
     - Task: 创建的任务对象。
     """
     logger.info("收到创建任务请求")
+
+    # 构造 TaskCreate 对象
+    task_data_dict = {
+        "source_language": source_language,
+        "target_language": target_language,
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model
+    }
 
     if file:
         logger.info(f"处理文件上传: {file.filename}")
@@ -50,17 +66,7 @@ async def create_task(
         save_upload_file(file, file_path)
         logger.info(f"文件保存至: {file_path}")
 
-        # 构建任务创建数据
-        task_data = schemas.TaskCreate(
-            video_path=file_path,
-            source_language=source_language,
-            target_language=target_language
-        )
-
-        # 调用 CRUD 创建任务
-        # 注意：这里可能会生成新的 UUID，如果需要关联文件名 ID，可以在 CRUD 中做调整
-        # 但目前分开也可以，只要路径是对的。
-        return crud.create_task(db=db, task=task_data)
+        task_data_dict["video_path"] = file_path
 
     elif video_path:
         logger.info(f"处理本地路径: {video_path}")
@@ -69,15 +75,16 @@ async def create_task(
              logger.error(f"文件未找到: {video_path}")
              raise HTTPException(status_code=400, detail=f"文件未找到: {video_path}")
 
-        task_data = schemas.TaskCreate(
-            video_path=video_path,
-            source_language=source_language,
-            target_language=target_language
-        )
-        return crud.create_task(db=db, task=task_data)
+        task_data_dict["video_path"] = video_path
     else:
         logger.error("未提供文件或路径")
         raise HTTPException(status_code=400, detail="必须上传文件或提供本地文件路径")
+
+    # 创建 Pydantic 对象
+    task_data = schemas.TaskCreate(**task_data_dict)
+
+    # 调用 CRUD 创建任务
+    return crud.create_task(db=db, task=task_data)
 
 
 @router.get("/", response_model=list[schemas.Task], summary="获取任务列表", description="获取所有历史任务，按创建时间倒序排列。")

@@ -59,3 +59,7 @@ class Task(Base):
     # 用于存储各个步骤产生的中间结果，如 Whisper 识别结果、术语表等
     # 这允许任务中断后恢复，或用于调试
     task_metadata = Column(JSON, default=dict, doc="任务元数据存储 (包含各步骤中间结果)")
+
+    # LLM 配置 (新增)
+    # 存储本次任务使用的 LLM API Key 和 Base URL
+    llm_config = Column(JSON, default=dict, doc="LLM 配置 (api_key, base_url)")
