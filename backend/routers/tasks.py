@@ -11,13 +11,13 @@ from loguru import logger
 from typing import Optional
 
 router = APIRouter()
-UPLOAD_DIR = "/data/uploads" # 默认上传目录
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/data/uploads") # 使用环境变量或默认值
 
 # 确保上传目录存在
 ensure_directory(UPLOAD_DIR)
 
 @router.post("/", response_model=schemas.Task, summary="创建新任务", description="上传文件或提供文件路径以创建新的字幕生成任务。")
-async def create_task(
+def create_task(
     # 使用 Form 参数，因为文件上传只能用 form-data
     file: Optional[UploadFile] = File(None, description="要上传的视频文件"),
     video_path: Optional[str] = Form(None, description="本地视频路径"),
@@ -30,17 +30,7 @@ async def create_task(
 ):
     """
     创建任务接口。
-
-    参数:
-    - file: 可选，上传的视频文件。
-    - video_path: 可选，本地文件路径（如果直接挂载了本地目录）。
-    - source_language: 源语言 (默认 auto)。
-    - target_language: 目标语言 (默认 zh)。
-    - api_key: LLM API Key (如果不填则尝试使用环境变量)。
-    - base_url: LLM Base URL (如果不填则尝试使用环境变量)。
-
-    返回:
-    - Task: 创建的任务对象。
+    (Synchronous handler to allow blocking file I/O in threadpool)
     """
     logger.info("收到创建任务请求")
 
@@ -63,10 +53,18 @@ async def create_task(
         safe_filename = f"{task_id_placeholder}_{file.filename}"
         file_path = os.path.join(UPLOAD_DIR, safe_filename)
 
-        # 保存文件到挂载目录
-        save_upload_file(file, file_path)
-        logger.info(f"文件保存至: {file_path}")
+        # 保存文件到挂载目录 (Blocking I/O)
+        try:
+             # Fallback to local ./uploads if permission denied (as per memory)
+             save_upload_file(file, file_path)
+        except PermissionError:
+             logger.warning(f"Permission denied for {UPLOAD_DIR}, falling back to ./uploads")
+             local_upload_dir = "./uploads"
+             ensure_directory(local_upload_dir)
+             file_path = os.path.join(local_upload_dir, safe_filename)
+             save_upload_file(file, file_path)
 
+        logger.info(f"文件保存至: {file_path}")
         task_data_dict["video_path"] = file_path
 
     elif video_path:
@@ -85,27 +83,21 @@ async def create_task(
     task_data = schemas.TaskCreate(**task_data_dict)
 
     # 调用 CRUD 创建任务
-    new_task = crud.create_task(db=db, task=task_data)
+    db_task = crud.create_task(db=db, task=task_data)
 
-    # 触发 Celery 任务
-    logger.info(f"触发 Celery 任务: {new_task.id}")
-    process_video_task.delay(new_task.id)
+    # 异步触发 Celery 任务
+    process_video_task.delay(db_task.id)
+    logger.info(f"Celery 任务已触发: {db_task.id}")
 
-    return new_task
+    return db_task
 
 
 @router.get("/", response_model=list[schemas.Task], summary="获取任务列表", description="获取所有历史任务，按创建时间倒序排列。")
 def read_tasks(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """
-    获取任务列表接口 (分页)。
-    """
     return crud.get_tasks(db, skip=skip, limit=limit)
 
 @router.get("/{task_id}", response_model=schemas.Task, summary="获取任务详情", description="根据 ID 获取单个任务的详细信息，包括状态和日志。")
 def read_task(task_id: str, db: Session = Depends(get_db)):
-    """
-    获取单个任务详情接口。
-    """
     db_task = crud.get_task(db, task_id=task_id)
     if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -113,12 +105,6 @@ def read_task(task_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{task_id}/action", summary="任务操作", description="对任务执行操作，如暂停、恢复。")
 def task_action(task_id: str, action: str, db: Session = Depends(get_db)):
-    """
-    任务操作接口。
-
-    参数:
-    - action: "pause" (暂停) 或 "resume" (恢复)
-    """
     logger.info(f"收到任务操作请求: {task_id}, 动作: {action}")
 
     db_task = crud.get_task(db, task_id=task_id)
@@ -129,12 +115,9 @@ def task_action(task_id: str, action: str, db: Session = Depends(get_db)):
         crud.update_task(db, task_id, {"status": models.TaskStatus.PAUSED})
         return {"message": "任务已暂停 (信号已发送)"}
     elif action == "resume":
-        crud.update_task(db, task_id, {"status": models.TaskStatus.PENDING}) # 或者 PROCESSING，取决于具体逻辑
-        # 恢复时，可能需要重新触发 Celery 任务，或者让 Celery 任务自己检查状态
-        # 这里简化为：前端调用 resume 后，Celery 任务若已退出则需重新触发，若还在运行只是暂停了循环则继续
-        # 由于我们 Celery 任务是检查 interrupt 的，如果完全退出了，需要重新 process。
-        # 为了健壮性，这里检查如果任务不是 PROCESSING 且不是 COMPLETED，则重新提交。
-        # 但要注意幂等性。
+        crud.update_task(db, task_id, {"status": models.TaskStatus.PENDING})
+
+        # Resume logic: re-trigger if needed
         if db_task.status != models.TaskStatus.PROCESSING and db_task.status != models.TaskStatus.COMPLETED:
              process_video_task.delay(task_id)
 

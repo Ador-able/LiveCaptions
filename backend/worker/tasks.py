@@ -1,39 +1,23 @@
+import os
+import shutil
+import traceback
+from celery import Task
+from sqlalchemy.orm import Session
+from loguru import logger
+from datetime import datetime
+
 from .celery_app import celery_app
-from ..database import SessionLocal, get_db
+from ..database import SessionLocal
 from .. import crud, models
 from ..services.audio import extract_audio, separate_vocals
 from ..services.asr import get_asr_service
+from ..services.diarization import get_diarization_service
 from ..services.alignment import get_alignment_service
 from ..services.llm import LLMService
-import time
-import os
-import shutil
-from sqlalchemy.orm import Session
-from datetime import datetime
-from loguru import logger
-
-# 数据库会话依赖 (用于 worker 内部)
-def get_db_session():
-    """
-    获取独立的数据库会话，供 worker 使用。
-    Celery worker 运行在不同进程中，无法直接使用 FastAPI 的 Depends。
-    """
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 def check_interrupt(task_id: str, db: Session) -> bool:
     """
     检查任务是否被用户暂停或中断。
-
-    参数:
-        task_id: 任务 ID
-        db: 数据库会话
-
-    返回:
-        bool: 如果需要中断 (已暂停/已取消)，返回 True。
     """
     # 强制从数据库刷新状态
     db.expire_all()
@@ -43,224 +27,241 @@ def check_interrupt(task_id: str, db: Session) -> bool:
         return True
     return False
 
-# 步骤 1: 音频预处理 (Demucs / VAD)
-def step_audio_preprocessing(task_id: str, db: Session, video_path: str):
-    logger.info(f"任务 {task_id}: 开始音频预处理...")
+def _align_speakers(asr_segments, diarization_segments):
+    """
+    将 ASR 单词/片段与说话人片段对齐。
+    """
+    if not diarization_segments:
+        return asr_segments # No speaker info
 
-    # 准备输出目录
-    task_dir = os.path.dirname(video_path)
-    audio_output = os.path.join(task_dir, "audio_original.wav")
+    aligned = []
+    # 将说话人片段按开始时间排序
+    diarization_segments.sort(key=lambda x: x["start"])
 
-    # 提取音频
-    if not os.path.exists(audio_output):
-        extract_audio(video_path, audio_output)
+    for seg in asr_segments:
+        start = seg["start"]
+        end = seg["end"]
 
-    # 人声分离 (Demucs)
-    # 分离结果将位于 task_dir/htdemucs/...
-    try:
-        vocals_path = separate_vocals(audio_output, task_dir)
-        # 更新任务元数据，保存人声路径
-        task = crud.get_task(db, task_id)
-        metadata = dict(task.task_metadata or {})
-        metadata["vocals_path"] = vocals_path
-        metadata["original_audio_path"] = audio_output
-        crud.update_task(db, task_id, {
-            "progress": 20.0,
-            "current_step": "音频预处理完成",
-            "task_metadata": metadata
-        })
-    except Exception as e:
-        logger.error(f"人声分离失败: {e}")
-        raise e
+        # 寻找重叠最多的说话人
+        best_speaker = "Unknown"
+        max_overlap = 0
 
-# 步骤 2: ASR 识别与说话人分离 (Whisper)
-def step_asr_diarization(task_id: str, db: Session):
-    logger.info(f"任务 {task_id}: 开始 ASR 识别...")
+        for diag in diarization_segments:
+            d_start = diag["start"]
+            d_end = diag["end"]
 
-    task = crud.get_task(db, task_id)
-    metadata = task.task_metadata or {}
-    vocals_path = metadata.get("vocals_path")
+            # Optimization: if diag starts after seg ends, stop looking
+            if d_start >= end:
+                break
 
-    if not vocals_path or not os.path.exists(vocals_path):
-        raise FileNotFoundError("未找到人声分离后的音频文件")
+            # Compute overlap
+            overlap_start = max(start, d_start)
+            overlap_end = min(end, d_end)
+            overlap = max(0, overlap_end - overlap_start)
 
-    asr_service = get_asr_service()
-    # 使用源语言进行转写，如果未指定则自动检测
-    segments, detected_lang = asr_service.transcribe(vocals_path, language=task.source_language if task.source_language != "auto" else None)
+            if overlap > max_overlap:
+                max_overlap = overlap
+                best_speaker = diag["speaker"]
 
-    # 保存 Whisper 原始结果
-    metadata["asr_segments"] = segments
-    metadata["detected_language"] = detected_lang
+        new_seg = seg.copy()
+        new_seg["speaker"] = best_speaker
+        aligned.append(new_seg)
 
-    crud.update_task(db, task_id, {
-        "progress": 40.0,
-        "current_step": "ASR 识别完成",
-        "task_metadata": metadata,
-        # 如果源语言是 auto，更新为检测到的语言
-        "source_language": detected_lang if task.source_language == "auto" else task.source_language
-    })
-
-# 步骤 3: 字幕对齐与清洗 (Netflix 标准检查)
-def step_alignment_cleaning(task_id: str, db: Session):
-    logger.info(f"任务 {task_id}: 开始字幕对齐与清洗...")
-
-    task = crud.get_task(db, task_id)
-    metadata = task.task_metadata or {}
-    segments = metadata.get("asr_segments", [])
-
-    alignment_service = get_alignment_service()
-    compliant_segments = alignment_service.check_netflix_compliance(segments)
-
-    metadata["compliant_segments"] = compliant_segments
-
-    crud.update_task(db, task_id, {
-        "progress": 50.0,
-        "current_step": "对齐与清洗完成",
-        "task_metadata": metadata
-    })
-
-# 步骤 4: 术语提取 (LLM)
-def step_terminology_extraction(task_id: str, db: Session):
-    logger.info(f"任务 {task_id}: 开始术语提取...")
-
-    task = crud.get_task(db, task_id)
-    metadata = task.task_metadata or {}
-    segments = metadata.get("compliant_segments", [])
-
-    # 从任务配置中获取 LLM 设置
-    llm_config = task.llm_config or {}
-    api_key = llm_config.get("api_key")
-    base_url = llm_config.get("base_url")
-    model = llm_config.get("model", "gpt-4o")
-
-    # 将所有文本合并，用于术语提取
-    full_text = "\n".join([s["text"] for s in segments])
-
-    # 实例化 LLMService，传入任务特定的配置
-    llm_service = LLMService(api_key=api_key, base_url=base_url, model=model)
-    terminology_json = llm_service.extract_terminology(full_text, task.source_language, task.target_language)
-
-    metadata["terminology"] = terminology_json
-
-    crud.update_task(db, task_id, {
-        "progress": 60.0,
-        "current_step": "术语提取完成",
-        "task_metadata": metadata
-    })
-
-# 步骤 5: 三步翻译 (LLM)
-def step_translation(task_id: str, db: Session):
-    logger.info(f"任务 {task_id}: 开始三步翻译流程...")
-
-    task = crud.get_task(db, task_id)
-    metadata = task.task_metadata or {}
-    segments = metadata.get("compliant_segments", [])
-    terminology = metadata.get("terminology", "[]")
-
-    # 从任务配置中获取 LLM 设置
-    llm_config = task.llm_config or {}
-    api_key = llm_config.get("api_key")
-    base_url = llm_config.get("base_url")
-    model = llm_config.get("model", "gpt-4o")
-
-    # 实例化 LLMService，传入任务特定的配置
-    llm_service = LLMService(api_key=api_key, base_url=base_url, model=model)
-
-    translated_segments = []
-    total_segments = len(segments)
-
-    # 逐句或逐批翻译
-    for i, segment in enumerate(segments):
-        source_text = segment["text"]
-        translated_text = llm_service.three_step_translation(
-            source_text,
-            task.source_language,
-            task.target_language,
-            terminology
-        )
-
-        new_segment = segment.copy()
-        new_segment["text"] = translated_text
-        new_segment["original_text"] = source_text
-        translated_segments.append(new_segment)
-
-        # 更新进度 (60% -> 90%)
-        current_progress = 60.0 + (30.0 * (i + 1) / total_segments)
-        if i % max(1, total_segments // 10) == 0:
-            crud.update_task(db, task_id, {"progress": current_progress})
-
-    metadata["translated_segments"] = translated_segments
-
-    crud.update_task(db, task_id, {
-        "progress": 90.0,
-        "current_step": "翻译完成",
-        "task_metadata": metadata
-    })
+    return aligned
 
 @celery_app.task(bind=True, name="backend.worker.tasks.process_video_task")
 def process_video_task(self, task_id: str):
     """
-    视频处理的主工作流任务。
-    由 Celery Worker 执行。
+    视频处理主任务流程
     """
-    db = SessionLocal()
+    logger.info(f"Worker 开始处理任务: {task_id}")
+    db: Session = SessionLocal()
+
     try:
-        # 获取任务信息
+        # 0. 获取任务
         task = crud.get_task(db, task_id)
         if not task:
-            logger.error(f"任务 {task_id} 未找到，无法开始处理。")
+            logger.error(f"Task {task_id} not found in DB")
             return
 
-        # 更新状态为处理中
-        logger.info(f"正在处理任务: {task_id}")
-        crud.update_task(db, task_id, {"status": models.TaskStatus.PROCESSING, "progress": 0.0})
+        crud.update_task(db, task_id, {
+            "status": models.TaskStatus.PROCESSING,
+            "progress": 5.0,
+            "current_step": "Initializing"
+        })
 
-        # 主处理管线
+        if check_interrupt(task_id, db): return
+
+        # 准备路径
+        video_path = task.video_path
+        upload_dir = os.path.dirname(video_path)
+        base_name = os.path.splitext(os.path.basename(video_path))[0]
+
+        # 中间文件路径
+        audio_path = os.path.join(upload_dir, f"{base_name}.wav")
+        vocals_dir = os.path.join(upload_dir, "separated")
+
+        # 1. 提取音频
+        logger.info(f"Step 1: Extracting audio from {video_path}")
+        crud.update_task(db, task_id, {"current_step": "Extracting Audio", "progress": 10.0})
+        extract_audio(video_path, audio_path)
+
+        if check_interrupt(task_id, db): return
+
+        # 2. 人声分离
+        logger.info("Step 2: Separating vocals")
+        crud.update_task(db, task_id, {"current_step": "Separating Vocals", "progress": 20.0})
+        vocals_path = separate_vocals(audio_path, vocals_dir)
+
+        if check_interrupt(task_id, db): return
+
+        # 3. ASR 转写
+        logger.info("Step 3: ASR Transcription")
+        crud.update_task(db, task_id, {"current_step": "ASR Transcription", "progress": 30.0})
+        asr_service = get_asr_service()
+        # 显存优化：ASR 完成后可以尝试释放模型，但这里我们使用单例，暂不释放
+        asr_segments, detected_lang = asr_service.transcribe(vocals_path, language=task.source_language if task.source_language != "auto" else None)
+
+        # 更新源语言 (如果检测出)
+        if task.source_language == "auto":
+            crud.update_task(db, task_id, {"source_language": detected_lang})
+
+        if check_interrupt(task_id, db): return
+
+        # 4. 说话人分离 (Optional/Robust)
+        logger.info("Step 4: Speaker Diarization")
+        crud.update_task(db, task_id, {"current_step": "Speaker Diarization", "progress": 40.0})
+
+        speaker_segments = []
         try:
-            # 1. 音频预处理
-            if check_interrupt(task_id, db): return
-            step_audio_preprocessing(task_id, db, task.video_path)
-
-            # 2. ASR & 说话人分离
-            if check_interrupt(task_id, db): return
-            step_asr_diarization(task_id, db)
-
-            # 3. 对齐与清洗
-            if check_interrupt(task_id, db): return
-            step_alignment_cleaning(task_id, db)
-
-            # 4. 术语提取
-            if check_interrupt(task_id, db): return
-            step_terminology_extraction(task_id, db)
-
-            # 5. 翻译
-            if check_interrupt(task_id, db): return
-            step_translation(task_id, db)
-
-            # 完成
-            if check_interrupt(task_id, db): return
-            logger.info(f"任务 {task_id} 处理完成。")
-            crud.update_task(db, task_id, {"status": models.TaskStatus.COMPLETED, "progress": 100.0, "current_step": "完成"})
-
+            diarization_service = get_diarization_service()
+            # Use original audio or vocals? Using original usually better for speakers context but vocals is cleaner.
+            # Using audio_path (original) as per feat branch.
+            speaker_segments = diarization_service.diarize(audio_path)
         except Exception as e:
-            # 捕获所有异常并记录日志
-            logger.exception(f"任务 {task_id} 处理失败: {e}")
+            logger.warning(f"Diarization failed (skipping): {e}")
+            # Continue without speaker info
 
-            # 将错误信息写入任务日志
-            current_task = crud.get_task(db, task_id)
-            if current_task:
-                current_logs = current_task.logs or []
-                if not isinstance(current_logs, list):
-                     current_logs = []
-                current_logs.append(f"错误: {str(e)}")
+        if check_interrupt(task_id, db): return
 
-                crud.update_task(db, task_id, {
-                    "status": models.TaskStatus.FAILED,
-                    "logs": current_logs
-                })
-            # 重新抛出异常，让 Celery 知道任务失败 (用于重试或监控)
-            raise e
+        # 5. 对齐与合并 (ASR + Diarization)
+        logger.info("Step 5: Alignment & Merging")
+        crud.update_task(db, task_id, {"current_step": "Alignment", "progress": 50.0})
+        aligned_segments = _align_speakers(asr_segments, speaker_segments)
 
+        # 6. Netflix 合规性检查 (分割)
+        logger.info("Step 6: Compliance Check")
+        crud.update_task(db, task_id, {"current_step": "Compliance Check", "progress": 55.0})
+        alignment_service = get_alignment_service()
+        compliant_segments = alignment_service.check_netflix_compliance(aligned_segments)
+
+        # 保存中间结果到 metadata
+        task_metadata = task.task_metadata or {}
+        task_metadata["compliant_segments"] = compliant_segments
+        crud.update_task(db, task_id, {"task_metadata": task_metadata})
+
+        if check_interrupt(task_id, db): return
+
+        # 7. 术语提取 (LLM)
+        logger.info("Step 7: Terminology Extraction")
+        crud.update_task(db, task_id, {"current_step": "Terminology Extraction", "progress": 60.0})
+
+        llm_config = task.llm_config or {}
+        llm_service = LLMService(
+            api_key=llm_config.get("api_key"),
+            base_url=llm_config.get("base_url"),
+            model=llm_config.get("model", "gpt-4o")
+        )
+
+        full_text = "\n".join([s["text"] for s in compliant_segments])
+        # Terminology extraction might fail if text is empty
+        if full_text.strip():
+            terminology_json = llm_service.extract_terminology(
+                full_text,
+                task.source_language or detected_lang,
+                task.target_language
+            )
+        else:
+            terminology_json = "[]"
+
+        task_metadata["terminology"] = terminology_json
+        crud.update_task(db, task_id, {"task_metadata": task_metadata})
+
+        if check_interrupt(task_id, db): return
+
+        # 8. 三步翻译 (LLM)
+        logger.info("Step 8: Translation")
+        crud.update_task(db, task_id, {"current_step": "Translation", "progress": 65.0})
+
+        translated_segments = []
+        total_segs = len(compliant_segments)
+
+        # 批量处理或逐句处理。这里逐句处理，实际生产可能需要并发或批量。
+        for i, seg in enumerate(compliant_segments):
+            if check_interrupt(task_id, db): return # Check per segment or batch
+
+            source_text = seg["text"]
+            # 只有当有文本时才翻译
+            if source_text.strip():
+                trans_text = llm_service.three_step_translation(
+                    source_text,
+                    task.source_language or detected_lang,
+                    task.target_language,
+                    terminology_json
+                )
+            else:
+                trans_text = ""
+
+            new_seg = seg.copy()
+            new_seg["text"] = trans_text
+            new_seg["original_text"] = source_text
+            translated_segments.append(new_seg)
+
+            # 进度更新 65% -> 90%
+            if i % max(1, total_segs // 10) == 0:
+                prog = 65.0 + (25.0 * (i / total_segs))
+                crud.update_task(db, task_id, {"progress": prog})
+
+        task_metadata["translated_segments"] = translated_segments
+        crud.update_task(db, task_id, {"task_metadata": task_metadata})
+
+        if check_interrupt(task_id, db): return
+
+        # 9. 生成字幕文件
+        logger.info("Step 9: Generating Files")
+        crud.update_task(db, task_id, {"current_step": "Finalizing", "progress": 95.0})
+
+        srt_content = alignment_service.to_srt(translated_segments)
+        vtt_content = alignment_service.to_vtt(translated_segments)
+        ass_content = alignment_service.to_ass(translated_segments)
+
+        srt_path = os.path.join(upload_dir, f"{base_name}.srt")
+        vtt_path = os.path.join(upload_dir, f"{base_name}.vtt")
+        ass_path = os.path.join(upload_dir, f"{base_name}.ass")
+
+        with open(srt_path, "w", encoding="utf-8") as f: f.write(srt_content)
+        with open(vtt_path, "w", encoding="utf-8") as f: f.write(vtt_content)
+        with open(ass_path, "w", encoding="utf-8") as f: f.write(ass_content)
+
+        # 10. 完成
+        crud.update_task(db, task_id, {
+            "status": models.TaskStatus.COMPLETED,
+            "progress": 100.0,
+            "current_step": "Completed",
+            "result_files": {
+                "srt": srt_path,
+                "vtt": vtt_path,
+                "ass": ass_path
+            }
+        })
+        logger.info(f"Task {task_id} completed successfully.")
+
+    except Exception as e:
+        logger.error(f"Task {task_id} failed: {e}")
+        logger.error(traceback.format_exc())
+        crud.update_task(db, task_id, {
+            "status": models.TaskStatus.FAILED,
+            "error_message": str(e)
+        })
     finally:
-        # 确保关闭数据库连接
         db.close()
