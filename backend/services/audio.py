@@ -60,8 +60,9 @@ def separate_vocals(audio_path: str, output_dir: str):
         # Locate the separated vocal file path
         # Default structure: output_dir/mdx_extra_q/{input_filename_wo_ext}/vocals.wav
         filename_wo_ext = os.path.splitext(os.path.basename(audio_path))[0]
-        # Demucs creates a folder with the input filename (without extension) inside the model folder
-        vocals_path = os.path.join(output_dir, "mdx_extra_q", filename_wo_ext, "vocals.wav")
+        # Demucs creates a folder with the input filename (without extension) inside the model folder (htdemucs)
+        # Note: Demucs behavior might vary slightly by version, but this is standard for v4
+        vocals_path = os.path.join(output_dir, "htdemucs", filename_wo_ext, "vocals.wav")
 
         if not os.path.exists(vocals_path):
              # Debugging log if path structure is unexpected

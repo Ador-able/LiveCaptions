@@ -1,154 +1,184 @@
 import re
-import spacy
+import math
 from loguru import logger
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+import spacy
 
 class AlignmentService:
     """
     对齐与合规性检查服务
-    (Combined version: Segmentation logic from 'jules-alignment-segmentation' + Export logic from 'feat/backend-pipeline-enhancement')
+    
+    负责：
+    1. 根据 Netflix 字幕标准检查和分割字幕。
+    2. 处理时间戳对齐。
+    3. 清洗文本中的冗余字符。
+    4. 导出多种字幕格式 (SRT, VTT, ASS)。
     """
     def __init__(self):
+        logger.info("初始化 AlignmentService...")
+        # 预加载 Spacy 模型
         self.nlp_models = {}
+        try:
+            self.nlp_zh = spacy.load("zh_core_web_sm")
+            self.nlp_models['zh'] = self.nlp_zh
+            logger.info("加载中文 Spacy 模型成功")
+        except OSError:
+            logger.warning("未找到中文 Spacy 模型，将回退到简单分割")
+            self.nlp_zh = None
+
+        try:
+            self.nlp_en = spacy.load("en_core_web_sm")
+            self.nlp_models['en'] = self.nlp_en
+            logger.info("加载英文 Spacy 模型成功")
+        except OSError:
+            logger.warning("未找到英文 Spacy 模型，将回退到简单分割")
+            self.nlp_en = None
 
     def _get_nlp(self, lang: str):
-        if lang not in self.nlp_models:
-            model_name = "zh_core_web_sm" if lang == "zh" else "en_core_web_sm"
-            try:
-                logger.info(f"正在加载 Spacy 模型: {model_name}")
-                self.nlp_models[lang] = spacy.load(model_name)
-            except OSError:
-                logger.error(f"Spacy 模型 {model_name} 未找到，请确保已下载。")
-                raise
-        return self.nlp_models[lang]
-
-    def _detect_lang(self, text: str) -> str:
-        for char in text:
-            if '\u4e00' <= char <= '\u9fff':
-                return 'zh'
-        return 'en'
+        return self.nlp_models.get(lang)
 
     def check_netflix_compliance(self, segments: List[Dict[str, Any]], max_cpl=42, max_cps=20, force_single_line=True) -> List[Dict[str, Any]]:
-        logger.info(f"开始 Netflix 合规性检查 (max_cpl={max_cpl}, max_cps={max_cps}, single_line={force_single_line})")
+        """
+        检查并修复字幕以符合 Netflix 标准。
+
+        参数:
+        - segments: 原始字幕片段列表 (start, end, text)。
+        - max_cpl: 每行最大字符数 (默认 42)。
+        - max_cps: 每秒最大字符数 (默认 20)。
+        - force_single_line: 是否强制单行字幕。
+
+        返回:
+        - compliant_segments: 处理后的字幕片段列表。
+        """
+        logger.info(f"开始 Netflix 合规性检查 (max_cpl={max_cpl}, max_cps={max_cps})")
+
         compliant_segments = []
         for segment in segments:
             text = segment.get('text', "")
+            start = segment['start']
+            end = segment['end']
+
+            # 1. 基础文本清洗
             text = self._clean_text(text)
-            segment['text'] = text
             if not text:
                 continue
-            if len(text) > max_cpl:
-                 logger.debug(f"行过长 ({len(text)} > {max_cpl}): {text}，正在尝试分割...")
-                 sub_segments = self._recursive_split(segment, max_cpl)
-                 for sub_seg in sub_segments:
-                     self._calculate_metrics(sub_seg, max_cps)
-                     compliant_segments.append(sub_seg)
-            else:
-                 self._calculate_metrics(segment, max_cps)
-                 compliant_segments.append(segment)
-        logger.info(f"合规性检查完成，原 {len(segments)} 个片段 -> 现 {len(compliant_segments)} 个片段。")
+
+            # 2. 递归分割过长的行 (CPL 检查)
+            split_segments = self._recursive_split(text, start, end, max_cpl)
+
+            for sub_seg in split_segments:
+                sub_text = sub_seg['text']
+                sub_start = sub_seg['start']
+                sub_end = sub_seg['end']
+                duration = sub_end - sub_start
+
+                # 3. CPS (阅读速度) 检查
+                char_count = len(sub_text.replace(" ", ""))
+                cps = char_count / duration if duration > 0.1 else 0
+
+                # 如果 CPS 过高，尝试微调时间轴（如果允许重叠或微调）
+                # 这里我们只标记，不自动拉长时间轴以免重叠
+                if cps > max_cps:
+                    logger.debug(f"阅读速度过快 ({cps:.2f} > {max_cps}): {sub_text}")
+
+                sub_seg['cps'] = cps
+                sub_seg['cpl'] = len(sub_text)
+
+                compliant_segments.append(sub_seg)
+
+        logger.info(f"合规性检查完成: {len(segments)} -> {len(compliant_segments)} 片段")
         return compliant_segments
 
-    def _calculate_metrics(self, segment: Dict[str, Any], max_cps: int):
-        text = segment['text']
-        duration = segment['end'] - segment['start']
-        char_count = len(text.replace(" ", ""))
-        cps = char_count / duration if duration > 0 else 0
-        if cps > max_cps:
-            logger.warning(f"阅读速度过快 ({cps:.2f} CPS > {max_cps}): {text}")
-        segment['cps'] = cps
-        segment['cpl'] = len(text)
-
-    def _recursive_split(self, segment: Dict[str, Any], max_cpl: int) -> List[Dict[str, Any]]:
-        text = segment['text']
+    def _recursive_split(self, text: str, start: float, end: float, max_cpl: int) -> List[Dict[str, Any]]:
+        """
+        递归分割过长的文本片段，同时按比例分配时间轴。
+        优先使用 NLP 分句，其次标点，最后强制截断。
+        """
         if len(text) <= max_cpl:
-            return [segment]
-        lang = self._detect_lang(text)
-        nlp = self._get_nlp(lang)
-        doc = nlp(text)
-        sents = [sent.text.strip() for sent in doc.sents]
-        if len(sents) <= 1:
-            parts = self._split_by_punctuation(text, lang)
-        else:
-            parts = sents
-        if len(parts) <= 1:
-             parts = self._split_by_length(text, max_cpl, lang)
-        new_segments = self._realign_timestamps(segment, parts)
-        final_segments = []
-        for new_seg in new_segments:
-            if len(new_seg['text']) > max_cpl:
-                if new_seg['text'] == text:
-                     logger.warning(f"无法进一步分割且仍然过长: {text}")
-                     final_segments.append(new_seg)
-                else:
-                     final_segments.extend(self._recursive_split(new_seg, max_cpl))
-            else:
-                final_segments.append(new_seg)
-        return final_segments
+            return [{"start": start, "end": end, "text": text}]
 
-    def _split_by_punctuation(self, text: str, lang: str) -> List[str]:
-        if lang == 'zh':
-            pattern = r'([，。；？！])'
-        else:
-            pattern = r'([,;?!])'
-        parts = re.split(pattern, text)
+        # 尝试寻找最佳分割点
+        split_index = self._find_best_split_point(text, max_cpl)
+
+        if split_index == -1 or split_index >= len(text):
+            # 无法找到好的分割点，或者分割点无效（未缩短文本），强制按 max_cpl 分割
+            split_index = max_cpl
+
+        part1_text = text[:split_index].strip()
+        part2_text = text[split_index:].strip()
+
+        # 按字符长度比例分配时间
+        total_len = len(text)
+        part1_len = len(part1_text)
+
+        if total_len == 0:
+            return []
+
+        duration = end - start
+        split_time = start + (duration * (part1_len / total_len))
+
         result = []
-        current = ""
-        for part in parts:
-            if re.match(pattern, part):
-                current += part
-                result.append(current)
-                current = ""
-            else:
-                current += part
-        if current:
-            result.append(current)
-        return [p.strip() for p in result if p.strip()]
+        # 递归处理两部分
+        if part1_text:
+            result.extend(self._recursive_split(part1_text, start, split_time, max_cpl))
+        if part2_text:
+            result.extend(self._recursive_split(part2_text, split_time, end, max_cpl))
 
-    def _split_by_length(self, text: str, max_cpl: int, lang: str) -> List[str]:
-        parts = []
-        while len(text) > max_cpl:
-            split_idx = max_cpl
-            if lang == 'en':
-                found_space = text.rfind(' ', 0, max_cpl)
-                if found_space != -1:
-                    split_idx = found_space + 1
-            parts.append(text[:split_idx].strip())
-            text = text[split_idx:].strip()
-        if text:
-            parts.append(text)
-        return parts
+        return result
 
-    def _realign_timestamps(self, original_segment: Dict[str, Any], text_parts: List[str]) -> List[Dict[str, Any]]:
-        start_time = original_segment['start']
-        end_time = original_segment['end']
-        total_duration = end_time - start_time
-        parts_total_len = sum(len(p) for p in text_parts)
-        new_segments = []
-        current_time = start_time
-        for part in text_parts:
-            part_len = len(part)
-            if part_len == 0: continue
-            weight = part_len / parts_total_len if parts_total_len > 0 else 0
-            seg_duration = total_duration * weight
-            seg_end = current_time + seg_duration
-            new_segments.append({
-                "start": current_time,
-                "end": seg_end,
-                "text": part,
-                "words": []
-            })
-            current_time = seg_end
-        return new_segments
+    def _find_best_split_point(self, text: str, max_cpl: int) -> int:
+        """
+        寻找最佳分割点。优先寻找句子边界，然后是标点符号。
+        """
+        if len(text) <= max_cpl:
+            return -1
+
+        search_end = min(len(text), max_cpl + 10)
+        search_text = text[:search_end]
+
+        # 1. 尝试使用 Spacy 检测句子边界
+        is_chinese = sum(1 for char in search_text if '\u4e00' <= char <= '\u9fff') > len(search_text) / 2
+        nlp = self.nlp_zh if is_chinese else self.nlp_en
+
+        best_split = -1
+
+        if nlp:
+            try:
+                doc = nlp(search_text)
+                for sent in doc.sents:
+                    # 如果句子结束位置在 max_cpl 范围内，这是一个很好的分割点
+                    if sent.end_char <= max_cpl:
+                        best_split = sent.end_char
+                    else:
+                        break
+            except Exception:
+                pass
+
+        if best_split > 0:
+            return best_split
+
+        # 2. 标点回退
+        punctuations = ["。", "！", "？", ".", "!", "?", "；", ";", "，", ","]
+        for i in range(min(len(text) - 1, max_cpl), 0, -1):
+             if text[i] in punctuations:
+                return i + 1
+
+        # 3. 空格回退
+        for i in range(min(len(text) - 1, max_cpl), 0, -1):
+            if text[i] == " ":
+                return i
+
+        return -1
 
     def _clean_text(self, text: str) -> str:
+        """清洗文本"""
         if not text:
             return ""
         text = re.sub(r'\s+', ' ', text).strip()
         return text
 
-    # Export methods (from feat)
     def to_srt(self, segments: List[Dict[str, Any]]) -> str:
+        """转换为 SRT 格式"""
         output = ""
         for i, seg in enumerate(segments):
             start = self._format_timestamp_srt(seg['start'])
@@ -158,6 +188,7 @@ class AlignmentService:
         return output
 
     def to_vtt(self, segments: List[Dict[str, Any]]) -> str:
+        """转换为 WebVTT 格式"""
         output = "WEBVTT\n\n"
         for i, seg in enumerate(segments):
             start = self._format_timestamp_vtt(seg['start'])
@@ -167,6 +198,7 @@ class AlignmentService:
         return output
 
     def to_ass(self, segments: List[Dict[str, Any]]) -> str:
+        """转换为 ASS 格式"""
         header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 384
@@ -188,6 +220,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return output
 
     def _format_timestamp_srt(self, seconds: float) -> str:
+        """00:00:00,000"""
         ms = int((seconds % 1) * 1000)
         s = int(seconds)
         m = s // 60
@@ -197,10 +230,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
     def _format_timestamp_vtt(self, seconds: float) -> str:
+        """00:00:00.000"""
         return self._format_timestamp_srt(seconds).replace(",", ".")
 
     def _format_timestamp_ass(self, seconds: float) -> str:
-        ms = int((seconds % 1) * 100)
+        """0:00:00.00"""
+        ms = int((seconds % 1) * 100) # ASS uses centiseconds
         s = int(seconds)
         m = s // 60
         h = m // 60
@@ -208,6 +243,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         m = m % 60
         return f"{h}:{m:02d}:{s:02d}.{ms:02d}"
 
+# 单例
 _alignment_service = None
 
 def get_alignment_service():
