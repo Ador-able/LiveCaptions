@@ -14,9 +14,6 @@ from ..services.asr import get_asr_service
 from ..services.diarization import get_diarization_service
 from ..services.alignment import get_alignment_service
 from ..services.llm import LLMService
-<<<<<<< HEAD
-
-
 def check_interrupt(task_id: str, db: Session) -> bool:
     """
     检查任务是否被用户暂停或中断。
