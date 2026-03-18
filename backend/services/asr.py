@@ -124,7 +124,9 @@ class ASRService:
                 segment_data = {
                     "start": segment.start,
                     "end": segment.end,
-                    "text": segment.text
+                    "text": segment.text,
+                    "no_speech_prob": float(segment.no_speech_prob),
+                    "avg_logprob": float(segment.avg_logprob)
                 }
                 if use_word_timestamps and segment.words:
                     segment_data["words"] = [{"start": w.start, "end": w.end, "word": w.word} for w in segment.words]
@@ -137,6 +139,7 @@ class ASRService:
                         logger.info(f"已处理 {segment_count} 个片段，进度: {current_progress*100:.0f}%")
 
             logger.info(f"转写完成，共生成 {len(result_segments)} 个片段. Detected language: {info.language}")
+            
             return result_segments, info.language
         except Exception as e:
             import traceback
