@@ -183,7 +183,11 @@ def process_video_logic(db: Session, task_id: str):
                     ensure_step(db, task_id, current_step, f"ASR 识别进度: {progress_pct}%", level="INFO")
                     logger.info(f"ASR 识别进度: {progress_pct}%")
             
-            asr_result, detected_language = asr_service.transcribe(vocals_path, progress_callback=asr_progress_callback)
+            asr_result, detected_language = asr_service.transcribe(
+                vocals_path, 
+                progress_callback=asr_progress_callback,
+                use_word_timestamps=task_data.use_word_timestamps
+            )
             segments = asr_result
 
             # Serialize locally
@@ -235,7 +239,11 @@ def process_video_logic(db: Session, task_id: str):
             elif task_data.source_language and task_data.source_language != "auto":
                 source_lang = task_data.source_language
             
-            compliant_segments = align_service.check_netflix_compliance(segments, lang=source_lang)
+            compliant_segments = align_service.check_netflix_compliance(
+                segments, 
+                lang=source_lang,
+                use_word_timestamps=task_data.use_word_timestamps
+            )
             
             with open(compliant_json_path, 'w', encoding='utf-8') as f:
                  json.dump(compliant_segments, f, ensure_ascii=False)

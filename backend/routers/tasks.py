@@ -28,6 +28,7 @@ def create_task(
     model: Optional[str] = Form(None, description="使用的 LLM 模型名称 (留空则使用环境变量配置)"),
     video_description: Optional[str] = Form(None, description="视频简介/背景信息 (可选，用于提升翻译质量)"),
     auto_save_subtitle: Optional[str] = Form("true", description="字幕生成后是否自动保存至视频文件夹"),
+    use_word_timestamps: Optional[str] = Form("true", description="ASR 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -38,6 +39,7 @@ def create_task(
     try:
         # 构造 TaskCreate 对象
         auto_save_bool = auto_save_subtitle.lower() in ("true", "1", "yes", "y", "on")
+        use_word_timestamps_bool = use_word_timestamps.lower() in ("true", "1", "yes", "y", "on")
         task_data_dict = {
             "source_language": source_language,
             "target_language": target_language,
@@ -45,7 +47,8 @@ def create_task(
             "base_url": base_url,
             "model": model,
             "video_description": video_description,
-            "auto_save_subtitle": auto_save_bool
+            "auto_save_subtitle": auto_save_bool,
+            "use_word_timestamps": use_word_timestamps_bool
         }
 
         if file:

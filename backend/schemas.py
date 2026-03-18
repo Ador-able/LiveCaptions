@@ -37,6 +37,9 @@ class TaskCreate(TaskBase):
     
     # 自动保存字幕选项
     auto_save_subtitle: Optional[bool] = Field(True, description="字幕生成后是否自动保存至视频文件夹")
+    
+    # ASR 词时间戳选项
+    use_word_timestamps: Optional[bool] = Field(True, description="ASR 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)")
 
 class TaskUpdate(BaseModel):
     """
@@ -80,6 +83,7 @@ class Task(TaskBase):
     llm_config: Optional[Any] = Field(None, description="本次任务使用的 LLM 配置信息")
     video_description: Optional[str] = Field(None, description="视频简介/背景信息")
     auto_save_subtitle: Optional[bool] = Field(None, description="字幕生成后是否自动保存至视频文件夹")
+    use_word_timestamps: Optional[bool] = Field(None, description="ASR 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)")
 
     class Config:
         """

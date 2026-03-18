@@ -79,3 +79,6 @@ class Task(Base):
     
     # 自动保存字幕选项
     auto_save_subtitle = Column(Boolean, default=True, doc="字幕生成后是否自动保存至视频文件夹")
+    
+    # ASR 词时间戳选项
+    use_word_timestamps = Column(Boolean, default=True, doc="ASR 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)")

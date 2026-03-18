@@ -20,7 +20,7 @@ class AlignmentService:
         # 初始化 LLM 服务
         self.llm_service = LLMService()
 
-    def check_netflix_compliance(self, segments: List[Dict[str, Any]], max_cpl=42, max_cps=20, force_single_line=True, lang: str = "en") -> List[Dict[str, Any]]:
+    def check_netflix_compliance(self, segments: List[Dict[str, Any]], max_cpl=42, max_cps=20, lang: str = "en", use_word_timestamps: bool = True) -> List[Dict[str, Any]]:
         """
         检查并修复字幕以符合 Netflix 标准。
         使用批量 LLM 分句一次性处理所有超长行。
@@ -30,16 +30,18 @@ class AlignmentService:
         - segments: 原始字幕片段列表。
         - max_cpl: 每行最大字符数 (默认 42)。
         - max_cps: 每秒最大字符数 (默认 20)。
-        - force_single_line: 是否强制单行字幕。
         - lang: 字幕语言 (如 'zh', 'en')。**必须传入**。
+        - use_word_timestamps: 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)。
 
         返回:
         - compliant_segments: 处理后的字幕片段列表。
         """
-        logger.info(f"开始 Netflix 合规性检查与时间戳优化 (lang={lang}, max_cpl={max_cpl}, max_cps={max_cps})")
+        logger.info(f"开始 Netflix 合规性检查与时间戳优化 (lang={lang}, max_cpl={max_cpl}, max_cps={max_cps}, use_word_timestamps={use_word_timestamps})")
 
-        # 首先利用词级时间戳精确优化字幕时间戳
-        segments = self._optimize_timestamps_using_words(segments)
+        if use_word_timestamps:
+            segments = self._optimize_timestamps_using_words(segments)
+        else:
+            logger.info("使用句时间戳模式")
 
         # 阶段 1: 清洗所有文本，收集超长行以供批量分割
         long_texts = []  # (segment_index, text)
@@ -137,70 +139,6 @@ class AlignmentService:
         
         return optimized_segments
 
-
-
-    def check_netflix_compliance(self, segments: List[Dict[str, Any]], max_cpl=42, max_cps=20, force_single_line=True, lang: str = "en") -> List[Dict[str, Any]]:
-        """
-        检查并修复字幕以符合 Netflix 标准。
-        使用批量 LLM 分句一次性处理所有超长行。
-
-        参数:
-        - segments: 原始字幕片段列表。
-        - max_cpl: 每行最大字符数 (默认 42)。
-        - max_cps: 每秒最大字符数 (默认 20)。
-        - force_single_line: 是否强制单行字幕。
-        - lang: 字幕语言 (如 'zh', 'en')。**必须传入**。
-
-        返回:
-        - compliant_segments: 处理后的字幕片段列表。
-        """
-        logger.info(f"开始 Netflix 合规性检查 (lang={lang}, max_cpl={max_cpl}, max_cps={max_cps})")
-
-        # 阶段 1: 清洗所有文本，收集超长行以供批量分割
-        long_texts = []  # (segment_index, text)
-        cleaned_segments = []
-        
-        for i, segment in enumerate(segments):
-            text = segment.get('text', "")
-            text = self._clean_text(text)
-            segment['text'] = text
-            cleaned_segments.append(segment)
-            
-            if text and len(text) > max_cpl:
-                long_texts.append((i, text))
-        
-        # 阶段 2: 通过 LLM 一次性批量分割所有超长行
-        pre_split_map = {}  # segment_index -> List[str] (分割结果)
-        if long_texts:
-            logger.info(f"批量分割 {len(long_texts)} 个超长行")
-            texts_to_split = [t for _, t in long_texts]
-            batch_results = self.llm_service.batch_split_texts(texts_to_split, lang, max_length=max_cpl)
-            
-            for batch_idx, (seg_idx, _) in enumerate(long_texts):
-                splits = batch_results.get(batch_idx, None)
-                if splits and len(splits) > 1:
-                    pre_split_map[seg_idx] = splits
-        
-        # 阶段 3: 应用分割结果，构建合规片段
-        compliant_segments = []
-        for i, segment in enumerate(cleaned_segments):
-            text = segment.get('text', "")
-            if not text:
-                continue
-
-            if len(text) > max_cpl:
-                logger.debug(f"行过长 ({len(text)} > {max_cpl}): {text}，正在尝试分割...")
-                sub_segments = self._recursive_split(segment, max_cpl, lang, pre_split_map.get(i))
-
-                for sub_seg in sub_segments:
-                    self._calculate_metrics(sub_seg, max_cps)
-                    compliant_segments.append(sub_seg)
-            else:
-                self._calculate_metrics(segment, max_cps)
-                compliant_segments.append(segment)
-
-        logger.info(f"合规性检查完成，原 {len(segments)} 个片段 -> 现 {len(compliant_segments)} 个片段。")
-        return compliant_segments
 
     def _calculate_metrics(self, segment: Dict[str, Any], max_cps: int):
         """计算并更新片段的 CPL 和 CPS"""

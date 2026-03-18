@@ -54,7 +54,7 @@ class ASRService:
         """模型是否可用于推理（已加载且GPU资源未释放）"""
         return hasattr(self, 'model') and self.model is not None and not self._gpu_unloaded
 
-    def transcribe(self, audio_path: str, language: str = None, progress_callback=None) -> Tuple[List[Dict[str, Any]], Any]:
+    def transcribe(self, audio_path: str, language: str = None, progress_callback=None, use_word_timestamps: bool = True) -> Tuple[List[Dict[str, Any]], Any]:
         """
         Transcribe audio file.
         
@@ -86,7 +86,7 @@ class ASRService:
                     min_silence_duration_ms=1000,
                     speech_pad_ms=400
                 ),
-                word_timestamps=True,
+                word_timestamps=use_word_timestamps,
                 condition_on_previous_text=False,
                 # temperature=0.2,
                 compression_ratio_threshold=2.2,
@@ -101,12 +101,14 @@ class ASRService:
             
             for segment in segments:
                 segment_count += 1
-                result_segments.append({
+                segment_data = {
                     "start": segment.start,
                     "end": segment.end,
-                    "text": segment.text,
-                    "words": [{"start": w.start, "end": w.end, "word": w.word} for w in segment.words] if segment.words else []
-                })
+                    "text": segment.text
+                }
+                if use_word_timestamps and segment.words:
+                    segment_data["words"] = [{"start": w.start, "end": w.end, "word": w.word} for w in segment.words]
+                result_segments.append(segment_data)
                 
                 if progress_callback and total_duration > 0:
                     current_progress = min(1.0, segment.end / total_duration)

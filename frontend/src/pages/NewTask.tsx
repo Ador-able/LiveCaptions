@@ -53,6 +53,7 @@ interface FormData {
     model: string;
   };
   auto_save_subtitle: boolean;
+  use_word_timestamps: boolean;
 }
 
 export default function NewTask() {
@@ -70,6 +71,7 @@ export default function NewTask() {
       model: '',
     },
     auto_save_subtitle: true,
+    use_word_timestamps: true,
   });
 
   const cleanFilePath = (path: string): string => {
@@ -136,6 +138,7 @@ export default function NewTask() {
       formDataPayload.append('target_language', formData.target_language);
       formDataPayload.append('video_description', formData.video_description);
       formDataPayload.append('auto_save_subtitle', String(formData.auto_save_subtitle));
+      formDataPayload.append('use_word_timestamps', String(formData.use_word_timestamps));
       
       if (formData.llm_config.api_key) {
         formDataPayload.append('api_key', formData.llm_config.api_key);
@@ -308,6 +311,19 @@ export default function NewTask() {
             />
             <Label htmlFor="auto_save_subtitle" className="text-sm font-normal cursor-pointer">
               字幕生成后自动保存至视频文件夹内
+            </Label>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="use_word_timestamps"
+              checked={formData.use_word_timestamps}
+              onCheckedChange={(checked) =>
+                setFormData({ ...formData, use_word_timestamps: checked as boolean })
+              }
+            />
+            <Label htmlFor="use_word_timestamps" className="text-sm font-normal cursor-pointer">
+              使用词时间戳 (更精确的字幕时间)
             </Label>
           </div>
         </CardContent>

@@ -80,7 +80,8 @@ def create_task(db: Session, task: schemas.TaskCreate):
         updated_at=datetime.utcnow(),
         llm_config=llm_config, # 存储 LLM 配置
         video_description=task.video_description,
-        auto_save_subtitle=task.auto_save_subtitle
+        auto_save_subtitle=task.auto_save_subtitle,
+        use_word_timestamps=task.use_word_timestamps
     )
     db.add(db_task)
     db.commit()
