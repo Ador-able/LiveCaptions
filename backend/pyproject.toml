@@ -1,0 +1,70 @@
+[tool.poetry]
+name = "livecaptions-backend"
+version = "1.0.0"
+description = "LiveCaptions Backend - Video Captioning and Translation System"
+authors = ["LiveCaptions Team"]
+readme = "Readme.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "*"
+uvicorn = {extras = ["standard"], version = "==0.29.0"}
+celery = "==5.4.0"
+redis = "==5.0.4"
+sqlalchemy = "==2.0.30"
+alembic = "==1.13.1"
+python-dotenv = "==1.0.1"
+pydantic = "==2.7.1"
+httpx = "==0.27.0"
+faster-whisper = "==1.0.2"
+demucs = "*"
+pyannote.audio = "==3.4.0"
+huggingface_hub = "==0.36.0"
+openai = "==1.30.1"
+yt-dlp = "==2024.4.9"
+ffmpeg-python = "==0.2.0"
+python-multipart = "==0.0.9"
+jinja2 = "==3.1.4"
+tenacity = "==8.3.0"
+loguru = "==0.7.2"
+requests = "==2.31.0"
+watchdog = "==4.0.0"
+psutil = "*"
+websockets = "*"
+numpy = "<2"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.4.0"
+black = "^24.4.0"
+isort = "^5.13.0"
+mypy = "^1.10.0"
+pytest = "^8.2.0"
+
+[tool.black]
+line-length = 120
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+line-length = 120
+multi_line_output = 3
+include_trailing_comma = true
+
+[tool.ruff]
+line-length = 120
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501", "W503", "F401"]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
