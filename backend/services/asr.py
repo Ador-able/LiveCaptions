@@ -93,11 +93,9 @@ class ASRService:
             
             vad_params = dict(
                 min_silence_duration_ms=500,
-                speech_pad_ms=200
+                speech_pad_ms=200,
+                threshold=0.8
             )
-            
-            if not use_word_timestamps:
-                vad_params["threshold"] = 0.79
             
             segments, info = self.model.transcribe(
                 audio_path, 
