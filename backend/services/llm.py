@@ -576,8 +576,9 @@ class LLMService:
                     try:
                         idx = int(idx_str) - 1
                         if 0 <= idx < len(block):
+                            old_text = block[idx]["text"]
                             block[idx]["text"] = new_text
-                            logger.info(f"润色更新: <{idx + 1}> {new_text}")
+                            logger.info(f"润色更新 <{idx + 1}>:\n  [前] {old_text}\n  [后] {new_text}")
                     except (ValueError, IndexError):
                         pass
 
