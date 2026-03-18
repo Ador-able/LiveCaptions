@@ -171,8 +171,8 @@ def process_video_logic(db: Session, task_id: str):
         current_step = 3
         ensure_step(db, task_id, current_step, "开始 ASR 语音识别...", level="INFO")
         try:
-            ensure_step(db, task_id, current_step, "正在加载 ASR 模型 (首次运行需下载)...", level="INFO")
-            asr_service = get_asr_service()
+            ensure_step(db, task_id, current_step, f"正在加载 ASR 模型 (模型: {task_data.model})...", level="INFO")
+            asr_service = get_asr_service(model=task_data.model)
             
             last_logged_progress = 0
             def asr_progress_callback(progress: float):

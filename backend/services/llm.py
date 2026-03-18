@@ -562,7 +562,10 @@ class LLMService:
                - 让对话听起来像真实的人在说话
                - 使用符合目标语言习惯的口语化表达
             4. **保持原意**：不要改变原文的核心意思
-            5. **只返回修改项**：如果某条字幕已经很好，不需要修改，就不要包含在结果中
+            5. **[非常重要] 只返回修改项**：
+               - 只有当字幕确实需要修改时才返回
+               - 如果某条字幕已经很好，不需要修改，就不要包含在结果中
+               - 如果润色后和原文完全一样，绝对不要返回
             """
 
             try:
@@ -577,8 +580,9 @@ class LLMService:
                         idx = int(idx_str) - 1
                         if 0 <= idx < len(block):
                             old_text = block[idx]["text"]
-                            block[idx]["text"] = new_text
-                            logger.info(f"润色更新 <{idx + 1}>:\n  [前] {old_text}\n  [后] {new_text}")
+                            if old_text != new_text:
+                                block[idx]["text"] = new_text
+                                logger.info(f"润色更新 <{idx + 1}>:\n  [前] {old_text}\n  [后] {new_text}")
                     except (ValueError, IndexError):
                         pass
 

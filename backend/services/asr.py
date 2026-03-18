@@ -8,10 +8,11 @@ from loguru import logger
 import torch
 from typing import List, Dict, Any, Tuple
 
-from ..config import WHISPER_MODEL_PATH
+from ..config import WHISPER_MODEL_V2_PATH, WHISPER_MODEL_V3_PATH
 
 logging.basicConfig()
 logging.getLogger("faster_whisper").setLevel(logging.INFO)
+
 
 class ASRService:
     """
@@ -20,16 +21,29 @@ class ASRService:
     使用 Faster Whisper 模型进行语音转文字。
     支持 CUDA 加速，自动回退到 CPU。
     """
-    def __init__(self, model_size=None, device="cuda", compute_type="float16"):
+    def __init__(self, model_size=None, model="v3", device="cuda", compute_type="float16"):
         """
-        Initialize Whisper Model.
+        Initialize ASR Model.
+        
+        Args:
+            model_size: 模型路径或模型名称
+            model: 模型名称, "v2", "v3"
         """
         if model_size is None:
-            if os.path.exists(WHISPER_MODEL_PATH):
-                 model_size = WHISPER_MODEL_PATH
-                 logger.info(f"Using local model: {model_size}")
-            else:
-                 model_size = WHISPER_MODEL_PATH
+            if model == "v2":
+                if os.path.exists(WHISPER_MODEL_V2_PATH):
+                    model_size = WHISPER_MODEL_V2_PATH
+                    logger.info(f"Using local v2 model: {model_size}")
+                else:
+                    model_size = "large-v2"
+                    logger.info(f"Using v2 model: {model_size}")
+            elif model == "v3":
+                if os.path.exists(WHISPER_MODEL_V3_PATH):
+                    model_size = WHISPER_MODEL_V3_PATH
+                    logger.info(f"Using local v3 model: {model_size}")
+                else:
+                    model_size = "large-v3"
+                    logger.info(f"Using v3 model: {model_size}")
 
         self.device = device
         self.compute_type = compute_type
@@ -41,9 +55,8 @@ class ASRService:
             self.compute_type = "int8"
         logger.info(f"正在加载 Whisper 模型: {model_size} (设备: {self.device}, 精度: {self.compute_type})")
         try:
-            # 加载模型 (首次运行会自动下载)
             self.model = WhisperModel(model_size, device=self.device, compute_type=self.compute_type)
-            self._gpu_unloaded = False  # 跟踪GPU资源是否已释放
+            self._gpu_unloaded = False
             logger.info("Whisper 模型加载完成。")
         except Exception as e:
             logger.error(f"Whisper 模型加载失败: {e}")
@@ -77,21 +90,28 @@ class ASRService:
         
         try:
             logger.info("开始调用 model.transcribe()...")
+            
+            vad_params = dict(
+                min_silence_duration_ms=500,
+                speech_pad_ms=200
+            )
+            
+            if not use_word_timestamps:
+                vad_params["threshold"] = 0.79
+            
             segments, info = self.model.transcribe(
                 audio_path, 
                 language=language,
                 beam_size=10,
                 vad_filter=True,
-                vad_parameters=dict(
-                    min_silence_duration_ms=1000,
-                    speech_pad_ms=400
-                ),
+                vad_parameters=vad_params,
                 word_timestamps=use_word_timestamps,
                 condition_on_previous_text=False,
                 # temperature=0.2,
                 compression_ratio_threshold=2.2,
                 no_speech_threshold=0.6,
-                log_prob_threshold=-1.0
+                log_prob_threshold=-1.0,
+                repetition_penalty=1.1
             )
             logger.info(f"model.transcribe() 返回，开始迭代 segments，音频总时长: {info.duration:.2f}秒")
             
@@ -119,20 +139,13 @@ class ASRService:
             logger.info(f"转写完成，共生成 {len(result_segments)} 个片段. Detected language: {info.language}")
             return result_segments, info.language
         except Exception as e:
-            logger.error(f"ASR 转写失败: {e}")
+            import traceback
+            logger.error(f"ASR 转写失败: {e}\n{traceback.format_exc()}")
             raise RuntimeError(f"ASR Transcription failed: {e}")
 
     def unload(self):
         """
         释放GPU显存，但不销毁Python对象。
-
-        *** 重要 ***
-        CTranslate2 (faster-whisper 底层) 的 C++ 析构函数在 Windows + CUDA 环境下
-        会导致 SEGFAULT 静默崩溃。任何触发析构的操作 (del / 置 None / gc) 都不安全。
-        
-        解决方案：
-        使用 CTranslate2 自带的 unload_model() API，它只释放模型权重占用的
-        GPU/CPU 内存，但保持 C++ 对象骨架存活，不会触发析构函数。
         """
         if not hasattr(self, 'model') or self.model is None:
             logger.info("Whisper 模型不存在，跳过卸载")
@@ -145,14 +158,10 @@ class ASRService:
         logger.info("正在释放 Whisper 模型GPU显存...")
 
         try:
-            # Step 1: 同步 CUDA，确保所有异步 GPU 操作完成
             if self.device == "cuda" and torch.cuda.is_available():
                 torch.cuda.synchronize()
                 logger.debug("CUDA 同步完成")
 
-            # Step 2: 使用 CTranslate2 的 unload_model() 安全释放显存
-            # WhisperModel 内部有一个 self.model (ctranslate2.models.Whisper)
-            # 该对象有 unload_model() 方法可以安全释放权重而不触发 C++ 析构
             ct2_model = getattr(self.model, 'model', None)
             if ct2_model is not None and hasattr(ct2_model, 'unload_model'):
                 ct2_model.unload_model()
@@ -160,7 +169,6 @@ class ASRService:
             else:
                 logger.warning("未找到 CTranslate2 的 unload_model() 方法，跳过显存释放")
 
-            # Step 3: 清理 PyTorch 的 GPU 缓存
             gc.collect()
             if self.device == "cuda" and torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -169,20 +177,26 @@ class ASRService:
         except Exception as e:
             logger.warning(f"释放GPU显存时遇到异常: {e}")
 
-        # 标记为已卸载，下次 get_asr_service() 会重新创建实例
         self._gpu_unloaded = True
         logger.info("Whisper 模型GPU显存已释放完毕（对象保持存活，避免C++析构崩溃）")
 
-# 单例实例 (供 worker 使用)
-_asr_service = None
 
-def get_asr_service():
+_asr_services = {}
+
+def get_asr_service(model="v3"):
     """
-    获取 ASR 服务单例。
-    确保模型只加载一次，节省显存。
+    获取 ASR 服务实例。
+    支持加载多个模型。
     如果之前 GPU 资源被释放了，会重新创建实例。
     """
-    global _asr_service
-    if _asr_service is None or not _asr_service.is_available:
-        _asr_service = ASRService()
-    return _asr_service
+    global _asr_services
+    
+    # 负载健壮性：如果请求了不存在的模型，退回到 v3
+    if model not in ["v2", "v3"]:
+        logger.warning(f"Unknown model request: {model}, falling back to v3")
+        model = "v3"
+    
+    if model not in _asr_services or not _asr_services[model].is_available:
+        _asr_services[model] = ASRService(model=model)
+    return _asr_services[model]
+

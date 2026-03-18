@@ -82,3 +82,6 @@ class Task(Base):
     
     # ASR 词时间戳选项
     use_word_timestamps = Column(Boolean, default=True, doc="ASR 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)")
+    
+    # ASR 模型选择 (v2, v3)
+    model = Column(String, default="v3", doc="ASR 模型: 'v2', 'v3'")

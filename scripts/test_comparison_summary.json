@@ -1,0 +1,19 @@
+{
+  "models_tested": [
+    "v2",
+    "v3"
+  ],
+  "audio_file": "E:\\Projects\\LiveCaptions\\scripts\\test_clip.wav",
+  "results": {
+    "v2": {
+      "elapsed_time": 1.823957920074463,
+      "segment_count": 9,
+      "detected_lang": "ja"
+    },
+    "v3": {
+      "elapsed_time": 1.6357009410858154,
+      "segment_count": 10,
+      "detected_lang": "ja"
+    }
+  }
+}

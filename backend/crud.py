@@ -65,7 +65,7 @@ def create_task(db: Session, task: schemas.TaskCreate):
     llm_config = {
         "api_key": task.api_key,
         "base_url": task.base_url,
-        "model": task.model
+        "model": task.llm_model
     }
 
     db_task = models.Task(
@@ -81,7 +81,8 @@ def create_task(db: Session, task: schemas.TaskCreate):
         llm_config=llm_config, # 存储 LLM 配置
         video_description=task.video_description,
         auto_save_subtitle=task.auto_save_subtitle,
-        use_word_timestamps=task.use_word_timestamps
+        use_word_timestamps=task.use_word_timestamps,
+        model=task.model
     )
     db.add(db_task)
     db.commit()

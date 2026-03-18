@@ -275,7 +275,8 @@ def copy_project_files():
             "HF_HOME": "./models/huggingface",
             "HF_HUB_OFFLINE": "1",
             "TORCH_HOME": "./models/torch",
-            "WHISPER_MODEL_PATH": "./models/faster-whisper/large-v3",
+            "WHISPER_MODEL_V2_PATH": "./models/faster-whisper/large-v2",
+            "WHISPER_MODEL_V3_PATH": "./models/faster-whisper/large-v3",
             "DEMUCS_MODEL": "htdemucs_ft",
             "DEMUCS_DEVICE": "cuda",
             "DEMUCS_SEGMENT": "7",
@@ -315,7 +316,9 @@ CELERY_TIMEZONE=Asia/Shanghai
 HF_HOME=./models/huggingface
 HF_HUB_OFFLINE=1
 TORCH_HOME=./models/torch
-WHISPER_MODEL_PATH=./models/faster-whisper/large-v3
+WHISPER_MODEL_V2_PATH=./models/faster-whisper/large-v2
+WHISPER_MODEL_V3_PATH=./models/faster-whisper/large-v3
+FUNASR_MODEL_PATH=./models/funasr/Fun-ASR-Nano-2512
 
 DEMUCS_MODEL=htdemucs_ft
 DEMUCS_DEVICE=cuda

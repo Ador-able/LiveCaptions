@@ -35,13 +35,13 @@ HF_TOKEN = os.getenv("HF_TOKEN", "")
 HF_HOME = os.getenv("HF_HOME", str(BASE_DIR / "models" / "huggingface"))
 HF_HUB_OFFLINE = os.getenv("HF_HUB_OFFLINE", "1")
 TORCH_HOME = os.getenv("TORCH_HOME", str(BASE_DIR / "models" / "torch"))
-WHISPER_MODEL_PATH = os.getenv("WHISPER_MODEL_PATH", str(BASE_DIR / "models" / "faster-whisper" / "large-v3"))
-DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1")
+WHISPER_MODEL_V2_PATH = os.getenv("WHISPER_MODEL_V2_PATH", str(BASE_DIR / "models" / "faster-whisper" / "large-v2"))
+WHISPER_MODEL_V3_PATH = os.getenv("WHISPER_MODEL_V3_PATH", str(BASE_DIR / "models" / "faster-whisper" / "large-v3"))
 
 # --- Demucs 配置 ---
 DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs_ft")
 DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda")
-DEMUCS_SEGMENT = os.getenv("DEMUCS_SEGMENT", "7")
+DEMUCS_SEGMENT = os.getenv("DEMUCS_SEGMENT", "14")
 
 # --- 文件系统配置 ---
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))

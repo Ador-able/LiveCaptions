@@ -97,6 +97,7 @@ def separate_vocals(audio_path: str, output_dir: str):
         "-n",
         DEMUCS_MODEL,
         "--two-stems=vocals",
+        "--shifts", "4",
         "--segment",
         DEMUCS_SEGMENT,
         "-d",

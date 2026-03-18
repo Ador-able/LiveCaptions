@@ -30,7 +30,7 @@ class TaskCreate(TaskBase):
     # 新增 LLM 配置字段
     api_key: Optional[str] = Field(None, description="LLM 服务 API 密钥")
     base_url: Optional[str] = Field(None, description="LLM 服务 API 基础地址")
-    model: Optional[str] = Field(None, description="使用的 LLM 模型名称")
+    llm_model: Optional[str] = Field(None, description="使用的 LLM 模型名称")
     
     # 视频简介字段
     video_description: Optional[str] = Field(None, description="视频简介/背景信息，用于提升翻译质量")
@@ -40,6 +40,9 @@ class TaskCreate(TaskBase):
     
     # ASR 词时间戳选项
     use_word_timestamps: Optional[bool] = Field(True, description="ASR 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)")
+    
+    # ASR 模型选择
+    model: Optional[str] = Field("v3", description="ASR 模型: 'v2', 'v3'")
 
 class TaskUpdate(BaseModel):
     """
@@ -84,6 +87,7 @@ class Task(TaskBase):
     video_description: Optional[str] = Field(None, description="视频简介/背景信息")
     auto_save_subtitle: Optional[bool] = Field(None, description="字幕生成后是否自动保存至视频文件夹")
     use_word_timestamps: Optional[bool] = Field(None, description="ASR 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)")
+    model: Optional[str] = Field(None, description="ASR 模型: 'v2', 'v3'")
 
     class Config:
         """

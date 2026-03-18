@@ -25,10 +25,11 @@ def create_task(
     target_language: str = Form("zh", description="翻译目标语言 (例如: 'zh', 'en')"),
     api_key: Optional[str] = Form(None, description="LLM 服务 API Key (可选，留空则使用全局配置)"),
     base_url: Optional[str] = Form(None, description="LLM 服务 API 基础地址 (可选)"),
-    model: Optional[str] = Form(None, description="使用的 LLM 模型名称 (留空则使用环境变量配置)"),
+    llm_model: Optional[str] = Form(None, description="使用的 LLM 模型名称 (留空则使用环境变量配置)"),
     video_description: Optional[str] = Form(None, description="视频简介/背景信息 (可选，用于提升翻译质量)"),
     auto_save_subtitle: Optional[str] = Form("true", description="字幕生成后是否自动保存至视频文件夹"),
     use_word_timestamps: Optional[str] = Form("true", description="ASR 是否使用词时间戳 (True: 词时间戳, False: 句时间戳)"),
+    model: Optional[str] = Form("v3", description="ASR 模型: 'v2', 'v3'"),
     db: Session = Depends(get_db)
 ):
     """
@@ -45,10 +46,11 @@ def create_task(
             "target_language": target_language,
             "api_key": api_key,
             "base_url": base_url,
-            "model": model,
+            "llm_model": llm_model,
             "video_description": video_description,
             "auto_save_subtitle": auto_save_bool,
-            "use_word_timestamps": use_word_timestamps_bool
+            "use_word_timestamps": use_word_timestamps_bool,
+            "model": model
         }
 
         if file:

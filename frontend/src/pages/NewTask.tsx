@@ -54,6 +54,7 @@ interface FormData {
   };
   auto_save_subtitle: boolean;
   use_word_timestamps: boolean;
+  model: string;
 }
 
 export default function NewTask() {
@@ -72,6 +73,7 @@ export default function NewTask() {
     },
     auto_save_subtitle: true,
     use_word_timestamps: true,
+    model: 'v3',
   });
 
   const cleanFilePath = (path: string): string => {
@@ -139,6 +141,7 @@ export default function NewTask() {
       formDataPayload.append('video_description', formData.video_description);
       formDataPayload.append('auto_save_subtitle', String(formData.auto_save_subtitle));
       formDataPayload.append('use_word_timestamps', String(formData.use_word_timestamps));
+      formDataPayload.append('model', formData.model);
       
       if (formData.llm_config.api_key) {
         formDataPayload.append('api_key', formData.llm_config.api_key);
@@ -147,7 +150,7 @@ export default function NewTask() {
         formDataPayload.append('base_url', formData.llm_config.base_url);
       }
       if (formData.llm_config.model) {
-        formDataPayload.append('model', formData.llm_config.model);
+        formDataPayload.append('llm_model', formData.llm_config.model);
       }
       
       const task = await taskApi.create(formDataPayload);
@@ -312,6 +315,26 @@ export default function NewTask() {
             <Label htmlFor="auto_save_subtitle" className="text-sm font-normal cursor-pointer">
               字幕生成后自动保存至视频文件夹内
             </Label>
+          </div>
+
+          <div className="space-y-2">
+            <Label>ASR 模型</Label>
+            <Select
+              value={formData.model}
+              onValueChange={(v) => setFormData({ ...formData, model: v })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="选择模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="v2">Whisper v2 (large-v2)</SelectItem>
+                <SelectItem value="v3">Whisper v3 (large-v3)</SelectItem>
+
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              v3 精度最高，v2 速度更快。
+            </p>
           </div>
 
           <div className="flex items-center space-x-2">
