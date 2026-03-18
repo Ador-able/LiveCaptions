@@ -280,6 +280,7 @@ def copy_project_files():
             "DEMUCS_MODEL": "htdemucs_ft",
             "DEMUCS_DEVICE": "cuda",
             "DEMUCS_SEGMENT": "14",
+            "DEMUCS_SHIFTS": "2",
             "UPLOAD_DIR": "./data/uploads",
             "RESULT_DIR": "./data/results",
             "HOST": "0.0.0.0",
@@ -323,6 +324,7 @@ FUNASR_MODEL_PATH=./models/funasr/Fun-ASR-Nano-2512
 DEMUCS_MODEL=htdemucs_ft
 DEMUCS_DEVICE=cuda
 DEMUCS_SEGMENT=14
+DEMUCS_SHIFTS=2
 
 UPLOAD_DIR=./data/uploads
 RESULT_DIR=./data/results

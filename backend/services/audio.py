@@ -3,7 +3,7 @@ import shutil
 import subprocess
 from loguru import logger
 
-from ..config import HF_HOME, TORCH_HOME, DEMUCS_MODEL, DEMUCS_DEVICE, DEMUCS_SEGMENT
+from ..config import HF_HOME, TORCH_HOME, DEMUCS_MODEL, DEMUCS_DEVICE, DEMUCS_SEGMENT, DEMUCS_SHIFTS
 
 try:
     import static_ffmpeg
@@ -97,7 +97,7 @@ def separate_vocals(audio_path: str, output_dir: str):
         "-n",
         DEMUCS_MODEL,
         "--two-stems=vocals",
-        "--shifts", "4",
+        "--shifts", DEMUCS_SHIFTS,
         "--segment",
         DEMUCS_SEGMENT,
         "-d",

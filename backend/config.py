@@ -42,6 +42,7 @@ WHISPER_MODEL_V3_PATH = os.getenv("WHISPER_MODEL_V3_PATH", str(BASE_DIR / "model
 DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs_ft")
 DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda")
 DEMUCS_SEGMENT = os.getenv("DEMUCS_SEGMENT", "14")
+DEMUCS_SHIFTS = os.getenv("DEMUCS_SHIFTS", "2")
 
 # --- 文件系统配置 ---
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))
